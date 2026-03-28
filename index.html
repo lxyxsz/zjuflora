@@ -92,6 +92,16 @@
         }
         #panel.open { transform: translateX(0); }
 
+        /* ── Drag Handle ── */
+        #panel-drag-handle {
+            display: none;
+            width: 36px; height: 4px;
+            background: #ddd;
+            border-radius: 2px;
+            margin: 10px auto 0;
+            flex-shrink: 0;
+        }
+
         /* Mobile: bottom sheet */
         @media (max-width: 700px) {
             #panel {
@@ -106,11 +116,17 @@
                 max-height: 85vh;
                 transform: translateY(100%);
                 border-left: none;
-                border-top: 1px solid #ddd;
+                border-top: none;
                 border-radius: 16px 16px 0 0;
                 box-shadow: 0 -4px 20px rgba(0,0,0,0.12);
             }
             #panel.open { transform: translateY(0); }
+            #panel-drag-handle { display: block; }
+            #panel-close {
+                font-size: 22px;
+                padding: 4px 8px;
+                color: #bbb;
+            }
             #panel-actions {
                 padding-bottom: max(12px, env(safe-area-inset-bottom));
             }
@@ -465,7 +481,12 @@
 <div id="main">
     <div id="map"></div>
 
+    <!-- 手机端：点击地图区域关闭面板 -->
+    <div id="panel-backdrop" onclick="closePanel()"
+         style="display:none;position:fixed;inset:0;z-index:899;"></div>
+
     <div id="panel">
+        <div id="panel-drag-handle"></div>
         <div id="panel-header">
             <h2 id="panel-title">添加植物</h2>
             <button id="panel-close" onclick="closePanel()">✕</button>
@@ -1002,7 +1023,19 @@ async function uploadNewImages() {
         if (!img.isNew) { urls.push(img.url); continue; }
         const ext = img.file.name.split('.').pop() || 'jpg';
         const path = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-        const { error } = await sb.storage.from('plant-images').upload(path, img.file, { contentType: img.file.type });
+
+        // 压缩后再上传，减小体积
+        let file = img.file;
+        try {
+            const compressed = await compressImage(img.url, 1200);
+            const blob = await fetch(compressed).then(r => r.blob());
+            file = new File([blob], img.file.name, { type: 'image/jpeg' });
+        } catch(_) {}
+
+        // 30 秒超时
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('上传超时，请检查网络')), 30000));
+        const upload = sb.storage.from('plant-images').upload(path, file, { contentType: 'image/jpeg' });
+        const { error } = await Promise.race([upload, timeout]);
         if (error) { toast('图片上传失败：' + error.message); continue; }
         const { data } = sb.storage.from('plant-images').getPublicUrl(path);
         urls.push(data.publicUrl);
@@ -1018,43 +1051,53 @@ async function saveMarker() {
     if (!name) { toast('请填写中文名'); return; }
     if (!sb) { toast('请先完成设置'); return; }
 
-    toast('保存中...');
+    const saveBtn = document.querySelector('.btn-save');
+    if (saveBtn.disabled) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中...';
 
-    const images = await uploadNewImages();
-    const payload = {
-        name,
-        latin_name:  document.getElementById('f-latin').value.trim(),
-        family:      document.getElementById('f-family').value.trim(),
-        type:        document.getElementById('f-type').value,
-        season:      document.getElementById('f-season').value.trim(),
-        description: document.getElementById('f-desc').value.trim(),
-        images
-    };
+    try {
+        const images = await uploadNewImages();
+        const payload = {
+            name,
+            latin_name:  document.getElementById('f-latin').value.trim(),
+            family:      document.getElementById('f-family').value.trim(),
+            type:        document.getElementById('f-type').value,
+            season:      document.getElementById('f-season').value.trim(),
+            description: document.getElementById('f-desc').value.trim(),
+            images
+        };
 
-    if (editingId) {
-        const { error } = await sb.from('plants').update(payload).eq('id', editingId);
-        if (error) { toast('保存失败：' + error.message); return; }
-        const entry = leafletMarkers[editingId];
-        if (entry) {
-            entry.lmarker.setIcon(makeIcon(payload.type));
-            entry.data = { ...entry.data, ...payload };
-            entry.lmarker.unbindTooltip();
-            bindTooltip(entry.lmarker, entry.data);
+        if (editingId) {
+            const { error } = await sb.from('plants').update(payload).eq('id', editingId);
+            if (error) throw new Error(error.message);
+            const entry = leafletMarkers[editingId];
+            if (entry) {
+                entry.lmarker.setIcon(makeIcon(payload.type));
+                entry.data = { ...entry.data, ...payload };
+                entry.lmarker.unbindTooltip();
+                bindTooltip(entry.lmarker, entry.data);
+            }
+            toast('已更新：' + name);
+        } else {
+            if (!pendingLatLng) return;
+            const newPlant = { ...payload, lat: pendingLatLng.lat, lng: pendingLatLng.lng };
+            const { data, error } = await sb.from('plants').insert(newPlant).select().single();
+            if (error) throw new Error(error.message);
+            addToMap(data);
+            editingId = data.id;
+            document.getElementById('del-btn').style.display = 'inline-block';
+            toast('已添加：' + name);
         }
-        toast('已更新：' + name);
-    } else {
-        if (!pendingLatLng) return;
-        const newPlant = { ...payload, lat: pendingLatLng.lat, lng: pendingLatLng.lng };
-        const { data, error } = await sb.from('plants').insert(newPlant).select().single();
-        if (error) { toast('保存失败：' + error.message); return; }
-        addToMap(data);
-        editingId = data.id;
-        document.getElementById('del-btn').style.display = 'inline-block';
-        toast('已添加：' + name);
-    }
 
-    document.getElementById('panel-title').textContent = name;
-    closePanel();
+        document.getElementById('panel-title').textContent = name;
+        closePanel();
+    } catch(e) {
+        toast('保存失败：' + e.message);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '保存';
+    }
 }
 
 // ═══════════════════════════════
@@ -1078,8 +1121,16 @@ function setPanel(title, showDel) {
     document.getElementById('panel-title').textContent = title;
     document.getElementById('del-btn').style.display = showDel ? 'inline-block' : 'none';
 }
-function openPanel()  { document.getElementById('panel').classList.add('open'); }
-function closePanel() { document.getElementById('panel').classList.remove('open'); }
+function openPanel() {
+    document.getElementById('panel').classList.add('open');
+    if (window.innerWidth <= 700) {
+        document.getElementById('panel-backdrop').style.display = 'block';
+    }
+}
+function closePanel() {
+    document.getElementById('panel').classList.remove('open');
+    document.getElementById('panel-backdrop').style.display = 'none';
+}
 function renderSeasonTag(createdAt) {
     const el = document.getElementById('f-season-tag');
     if (!createdAt) { el.style.display = 'none'; return; }
@@ -1111,6 +1162,40 @@ function toast(msg) {
     clearTimeout(el._t);
     el._t = setTimeout(() => el.classList.remove('show'), 2600);
 }
+
+// ═══════════════════════════════
+//  手机下滑关闭面板
+// ═══════════════════════════════
+(function() {
+    let startY = 0, curY = 0, dragging = false;
+    const panel = document.getElementById('panel');
+    const handle = document.getElementById('panel-drag-handle');
+
+    handle.addEventListener('touchstart', e => {
+        startY = e.touches[0].clientY;
+        dragging = true;
+        panel.style.transition = 'none';
+    }, { passive: true });
+
+    document.addEventListener('touchmove', e => {
+        if (!dragging) return;
+        curY = e.touches[0].clientY;
+        const dy = Math.max(0, curY - startY);
+        panel.style.transform = `translateY(${dy}px)`;
+    }, { passive: true });
+
+    document.addEventListener('touchend', () => {
+        if (!dragging) return;
+        dragging = false;
+        panel.style.transition = '';
+        if (curY - startY > 80) {
+            closePanel();
+        } else {
+            panel.style.transform = '';
+        }
+        startY = curY = 0;
+    });
+})();
 
 // ── 启动 ──
 init();
