@@ -47,6 +47,30 @@
         .btn-cfg { background: rgba(255,255,255,0.18); color: white; }
         .btn-cfg:hover { background: rgba(255,255,255,0.28); }
 
+        /* ── Season Filter Bar ── */
+        #season-bar {
+            background: #1b4332;
+            display: flex;
+            gap: 6px;
+            padding: 7px 14px;
+            flex-shrink: 0;
+            z-index: 999;
+        }
+        .s-btn {
+            padding: 4px 12px;
+            border: none;
+            border-radius: 20px;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.75);
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+        .s-btn:hover { background: rgba(255,255,255,0.22); color: white; }
+        .s-btn.active { background: white; color: #1b4332; font-weight: 600; }
+
         /* ── Map ── */
         #main { display: flex; flex: 1; overflow: hidden; position: relative; }
         #map { flex: 1; height: 100%; }
@@ -178,6 +202,24 @@
         }
         #upload-area:hover { border-color: #52b788; color: #52b788; }
         #upload-input { display: none; }
+
+        /* ── Season Badge (in panel) ── */
+        #f-season-tag {
+            font-size: 12px;
+            color: #888;
+            padding: 4px 0 2px;
+        }
+        #f-season-tag span {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .tag-spring { background: #fce4ec; color: #c2185b; }
+        .tag-summer { background: #e8f5e9; color: #2e7d32; }
+        .tag-autumn { background: #fff3e0; color: #e65100; }
+        .tag-winter { background: #e3f2fd; color: #1565c0; }
 
         /* ── Recognize Button ── */
         #recognize-btn {
@@ -387,6 +429,15 @@
     </div>
 </div>
 
+<!-- Season Filter Bar -->
+<div id="season-bar">
+    <button class="s-btn active" onclick="filterSeason(null, this)">全部</button>
+    <button class="s-btn" onclick="filterSeason('spring', this)">🌸 春</button>
+    <button class="s-btn" onclick="filterSeason('summer', this)">☀️ 夏</button>
+    <button class="s-btn" onclick="filterSeason('autumn', this)">🍂 秋</button>
+    <button class="s-btn" onclick="filterSeason('winter', this)">❄️ 冬</button>
+</div>
+
 <!-- Main -->
 <div id="main">
     <div id="map"></div>
@@ -398,6 +449,8 @@
         </div>
         <div id="panel-scroll">
             <div id="panel-body">
+
+                <div id="f-season-tag" style="display:none"></div>
 
                 <div class="form-group">
                     <label>中文名 *</label>
@@ -473,6 +526,33 @@ let currentImages = [];    // { url, file?, isNew }
 const LS_URL = 'zjuflora_url';
 const LS_KEY = 'zjuflora_key';
 const LS_CLAUDE = 'zjuflora_claude';
+
+let activeSeasonFilter = null; // null = 全部
+
+const SEASON_LABEL = { spring:'🌸 春', summer:'☀️ 夏', autumn:'🍂 秋', winter:'❄️ 冬' };
+const SEASON_CLASS = { spring:'tag-spring', summer:'tag-summer', autumn:'tag-autumn', winter:'tag-winter' };
+
+function getBjNow() {
+    // 北京时间 UTC+8
+    return new Date(Date.now() + 8 * 3600 * 1000);
+}
+
+function getSeason(dateStr) {
+    if (!dateStr) return null;
+    // 转为北京时间月份
+    const d = new Date(new Date(dateStr).getTime() + 8 * 3600 * 1000);
+    const m = d.getUTCMonth() + 1; // 1-12
+    if (m >= 3 && m <= 5)  return 'spring';
+    if (m >= 6 && m <= 8)  return 'summer';
+    if (m >= 9 && m <= 11) return 'autumn';
+    return 'winter';
+}
+
+function formatBjTime(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(new Date(dateStr).getTime() + 8 * 3600 * 1000);
+    return `${d.getUTCFullYear()}年${d.getUTCMonth()+1}月${d.getUTCDate()}日`;
+}
 
 // ═══════════════════════════════
 //  初始化
@@ -596,6 +676,23 @@ function addToMap(plant) {
         .on('click', () => openPlant(plant.id));
     bindTooltip(lm, plant);
     leafletMarkers[plant.id] = { lmarker: lm, data: plant };
+    applyFilterToMarker(plant.id);
+}
+
+function applyFilterToMarker(id) {
+    const entry = leafletMarkers[id];
+    if (!entry) return;
+    const season = getSeason(entry.data.created_at);
+    const visible = !activeSeasonFilter || season === activeSeasonFilter;
+    if (visible) { if (!map.hasLayer(entry.lmarker)) entry.lmarker.addTo(map); }
+    else          { if (map.hasLayer(entry.lmarker))  map.removeLayer(entry.lmarker); }
+}
+
+function filterSeason(season, btn) {
+    activeSeasonFilter = season;
+    document.querySelectorAll('.s-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    Object.keys(leafletMarkers).forEach(applyFilterToMarker);
 }
 
 function buildTooltipHtml(plant) {
@@ -635,6 +732,7 @@ function openPlant(id) {
 
     renderPreviews();
     updateRecognizeBtn();
+    renderSeasonTag(p.created_at);
     setPanel(p.name || '植物详情', true);
     openPanel();
 }
@@ -865,12 +963,23 @@ function setPanel(title, showDel) {
 }
 function openPanel()  { document.getElementById('panel').classList.add('open'); }
 function closePanel() { document.getElementById('panel').classList.remove('open'); }
+function renderSeasonTag(createdAt) {
+    const el = document.getElementById('f-season-tag');
+    if (!createdAt) { el.style.display = 'none'; return; }
+    const season = getSeason(createdAt);
+    const label = SEASON_LABEL[season] || '';
+    const cls   = SEASON_CLASS[season] || '';
+    el.style.display = 'block';
+    el.innerHTML = `记录于 ${formatBjTime(createdAt)} &nbsp;<span class="${cls}">${label}</span>`;
+}
+
 function clearForm() {
     ['f-name','f-latin','f-family','f-season','f-desc'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('f-type').value = 'flower';
     currentImages = [];
     renderPreviews();
     document.getElementById('recognize-btn').style.display = 'none';
+    document.getElementById('f-season-tag').style.display = 'none';
 }
 
 // ═══════════════════════════════
