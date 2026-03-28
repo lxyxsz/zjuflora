@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>玉泉花草图鉴</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ── */
+        #header {
+            background: #2d6a4f;
+            color: white;
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 1000;
+            flex-shrink: 0;
+        }
+        #header h1 { font-size: 17px; font-weight: 600; letter-spacing: 1px; }
+        #header-controls { display: flex; gap: 8px; }
+
+        .btn {
+            padding: 6px 14px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: inherit;
+            transition: background 0.2s;
+        }
+        .btn-add { background: #52b788; color: white; }
+        .btn-add:hover { background: #40916c; }
+        .btn-add.active { background: #c0392b; }
+        .btn-cfg { background: rgba(255,255,255,0.18); color: white; }
+        .btn-cfg:hover { background: rgba(255,255,255,0.28); }
+
+        /* ── Map ── */
+        #main { display: flex; flex: 1; overflow: hidden; position: relative; }
+        #map { flex: 1; height: 100%; }
+        #map.add-mode { cursor: crosshair; }
+
+        /* ── Side Panel ── */
+        #panel {
+            width: 340px;
+            background: white;
+            border-left: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            position: absolute;
+            right: 0; top: 0; bottom: 0;
+            z-index: 900;
+            transform: translateX(100%);
+            transition: transform 0.28s cubic-bezier(.4,0,.2,1);
+            overflow: hidden;
+        }
+        #panel.open { transform: translateX(0); }
+
+        /* Mobile: bottom sheet */
+        @media (max-width: 700px) {
+            #panel {
+                position: fixed;
+                width: 100%;
+                left: 0;
+                right: 0;
+                top: auto;
+                bottom: 0;
+                height: auto;
+                max-height: 85dvh;
+                max-height: 85vh;
+                transform: translateY(100%);
+                border-left: none;
+                border-top: 1px solid #ddd;
+                border-radius: 16px 16px 0 0;
+                box-shadow: 0 -4px 20px rgba(0,0,0,0.12);
+            }
+            #panel.open { transform: translateY(0); }
+            #panel-actions {
+                padding-bottom: max(12px, env(safe-area-inset-bottom));
+            }
+        }
+
+        #panel-header {
+            padding: 14px 16px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+            background: white;
+        }
+        #panel-header h2 { font-size: 15px; color: #1b4332; }
+        #panel-close {
+            background: none; border: none;
+            font-size: 18px; cursor: pointer; color: #999;
+            line-height: 1; padding: 2px 4px;
+        }
+        #panel-close:hover { color: #333; }
+
+        #panel-scroll { overflow-y: auto; flex: 1; }
+
+        #panel-body {
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 11px;
+        }
+
+        .form-group { display: flex; flex-direction: column; gap: 4px; }
+        .form-group label { font-size: 11px; color: #888; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            padding: 8px 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 7px;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            background: #fafafa;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            border-color: #52b788;
+            background: white;
+        }
+        .form-group textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
+
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+        /* ── Images ── */
+        #images-label { font-size: 11px; color: #888; font-weight: 600; letter-spacing: 0.5px; }
+        #images-preview {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+        .img-item {
+            position: relative;
+            aspect-ratio: 1;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+        .img-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .img-item .rm-btn {
+            position: absolute; top: 3px; right: 3px;
+            background: rgba(0,0,0,0.55); color: white;
+            border: none; border-radius: 50%;
+            width: 20px; height: 20px;
+            font-size: 11px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #upload-area {
+            border: 2px dashed #d0d0d0;
+            border-radius: 8px;
+            padding: 14px;
+            text-align: center;
+            cursor: pointer;
+            color: #aaa;
+            font-size: 13px;
+            transition: border-color 0.2s, color 0.2s;
+        }
+        #upload-area:hover { border-color: #52b788; color: #52b788; }
+        #upload-input { display: none; }
+
+        /* ── Recognize Button ── */
+        #recognize-btn {
+            display: none;
+            width: 100%;
+            margin-top: 8px;
+            padding: 9px;
+            background: #f0faf4;
+            color: #2d6a4f;
+            border: 1px solid #b7e4c7;
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        #recognize-btn:hover:not(:disabled) { background: #d8f3dc; }
+        #recognize-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        #recognize-btn.hidden { display: none !important; }
+
+        /* ── Panel Actions ── */
+        #panel-actions {
+            padding: 12px 16px;
+            display: flex;
+            gap: 8px;
+            border-top: 1px solid #f0f0f0;
+            flex-shrink: 0;
+            background: white;
+        }
+        .btn-save {
+            flex: 1;
+            background: #2d6a4f; color: white;
+            padding: 10px; border: none;
+            border-radius: 8px; font-size: 14px;
+            cursor: pointer; font-family: inherit;
+            font-weight: 500;
+        }
+        .btn-save:hover { background: #1b4332; }
+        .btn-del {
+            background: #fef2f2; color: #dc2626;
+            padding: 10px 14px; border: none;
+            border-radius: 8px; font-size: 14px;
+            cursor: pointer; font-family: inherit;
+            display: none;
+        }
+        .btn-del:hover { background: #fee2e2; }
+
+        /* ── Config Modal ── */
+        #cfg-overlay {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.45);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 9999;
+        }
+        #cfg-overlay.hidden { display: none; }
+        #cfg-box {
+            background: white;
+            padding: 24px;
+            border-radius: 14px;
+            width: 90%; max-width: 420px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+        }
+        #cfg-box h2 { color: #2d6a4f; margin-bottom: 6px; font-size: 17px; }
+        #cfg-box .cfg-desc {
+            font-size: 13px; color: #666;
+            line-height: 1.7; margin-bottom: 16px;
+        }
+        #cfg-box .cfg-desc a { color: #2d6a4f; }
+        #cfg-box input {
+            width: 100%; padding: 9px 11px;
+            border: 1px solid #ddd; border-radius: 7px;
+            font-size: 13px; margin-bottom: 10px;
+            font-family: monospace; outline: none;
+        }
+        #cfg-box input:focus { border-color: #52b788; }
+        #cfg-box .cfg-divider {
+            border: none; border-top: 1px solid #eee;
+            margin: 14px 0 12px;
+        }
+        #cfg-box .cfg-section-title {
+            font-size: 12px; color: #888; font-weight: 600;
+            letter-spacing: 0.5px; margin-bottom: 8px;
+        }
+        #cfg-save {
+            width: 100%; padding: 10px;
+            background: #2d6a4f; color: white;
+            border: none; border-radius: 8px;
+            font-size: 14px; cursor: pointer;
+            font-family: inherit; font-weight: 500;
+        }
+        #cfg-save:hover { background: #1b4332; }
+
+        /* ── Loading ── */
+        #loading {
+            position: fixed; inset: 0;
+            background: white;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            gap: 14px; z-index: 9998;
+        }
+        #loading.hidden { display: none; }
+        .spinner {
+            width: 38px; height: 38px;
+            border: 3px solid #e8e8e8;
+            border-top-color: #2d6a4f;
+            border-radius: 50%;
+            animation: spin 0.75s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Toast ── */
+        #toast {
+            position: fixed;
+            bottom: 24px; left: 50%;
+            transform: translateX(-50%) translateY(10px);
+            background: rgba(20,20,20,0.8); color: white;
+            padding: 7px 18px; border-radius: 20px;
+            font-size: 13px; opacity: 0;
+            transition: opacity 0.25s, transform 0.25s;
+            z-index: 99999; pointer-events: none;
+            white-space: nowrap;
+        }
+        #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        /* ── Hover Tooltip ── */
+        .plant-tooltip {
+            background: white !important;
+            border: none !important;
+            border-radius: 10px !important;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.18) !important;
+            padding: 0 !important;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        }
+        .plant-tooltip::before { display: none !important; }
+        .tooltip-inner {
+            padding: 8px;
+            text-align: center;
+            min-width: 90px;
+        }
+        .tooltip-inner img {
+            width: 120px; height: 120px;
+            object-fit: cover;
+            border-radius: 7px;
+            display: block;
+            margin-bottom: 6px;
+        }
+        .tooltip-inner .t-name {
+            font-size: 13px; font-weight: 600; color: #1b4332;
+        }
+        .tooltip-inner .t-latin {
+            font-size: 11px; color: #888; font-style: italic; margin-top: 2px;
+        }
+
+        /* ── Lightbox ── */
+        #lightbox {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.92);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 99998; cursor: zoom-out;
+        }
+        #lightbox.hidden { display: none; }
+        #lightbox img {
+            max-width: 96%; max-height: 92vh;
+            border-radius: 6px;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading">
+    <div class="spinner"></div>
+    <span style="color:#888;font-size:14px">正在加载地图...</span>
+</div>
+
+<!-- Config Modal -->
+<div id="cfg-overlay" class="hidden">
+    <div id="cfg-box">
+        <h2>🌿 首次配置</h2>
+        <p class="cfg-desc">
+            需要填写你的 Supabase 项目信息，用于存储植物数据和图片。<br>
+            详细步骤见 <strong>配置指南.txt</strong>。
+        </p>
+        <input type="text" id="cfg-url" placeholder="Project URL（https://xxxx.supabase.co）" />
+        <input type="text" id="cfg-key" placeholder="anon public key" />
+        <hr class="cfg-divider" />
+        <div class="cfg-section-title">AI 植物识别（可选）</div>
+        <p class="cfg-desc" style="margin-bottom:10px">填写后，上传图片时可自动识别花草并填写信息。Key 仅存在本地，不会上传。</p>
+        <input type="password" id="cfg-claude" placeholder="Pl@ntNet API Key（在 my.plantnet.org 免费注册获取）" />
+        <button id="cfg-save" onclick="saveConfig()">保存并开始使用</button>
+    </div>
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" class="hidden" onclick="closeLightbox()">
+    <img id="lightbox-img" src="" alt="" />
+</div>
+
+<!-- Header -->
+<div id="header">
+    <h1>🌿 玉泉花草图鉴</h1>
+    <div id="header-controls">
+        <button class="btn btn-add" id="add-btn" onclick="toggleAddMode()">＋ 添加植物</button>
+        <button class="btn btn-cfg" onclick="openConfig()">设置</button>
+    </div>
+</div>
+
+<!-- Main -->
+<div id="main">
+    <div id="map"></div>
+
+    <div id="panel">
+        <div id="panel-header">
+            <h2 id="panel-title">添加植物</h2>
+            <button id="panel-close" onclick="closePanel()">✕</button>
+        </div>
+        <div id="panel-scroll">
+            <div id="panel-body">
+
+                <div class="form-group">
+                    <label>中文名 *</label>
+                    <input type="text" id="f-name" placeholder="例：垂丝海棠" />
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>学名</label>
+                        <input type="text" id="f-latin" placeholder="Malus halliana" />
+                    </div>
+                    <div class="form-group">
+                        <label>科属</label>
+                        <input type="text" id="f-family" placeholder="蔷薇科苹果属" />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>类型</label>
+                        <select id="f-type">
+                            <option value="flower">🌸 花卉</option>
+                            <option value="tree">🌳 乔木</option>
+                            <option value="shrub">🌿 灌木</option>
+                            <option value="grass">🍃 草本</option>
+                            <option value="other">🌱 其他</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>花期 / 观赏期</label>
+                        <input type="text" id="f-season" placeholder="3-4月" />
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>描述 / 备注</label>
+                    <textarea id="f-desc" placeholder="记录这株植物的特征、位置、趣闻..."></textarea>
+                </div>
+
+                <div>
+                    <div id="images-label" style="margin-bottom:8px">图片</div>
+                    <div id="images-preview"></div>
+                    <div id="upload-area" onclick="document.getElementById('upload-input').click()">
+                        📷 点击上传图片（可多张，支持手机拍照）
+                    </div>
+                    <input type="file" id="upload-input" accept="image/*" multiple onchange="handleUpload(event)" />
+                    <button id="recognize-btn" onclick="recognizePlant()">🔍 自动识别植物信息</button>
+                </div>
+
+            </div>
+        </div>
+        <div id="panel-actions">
+            <button class="btn-save" onclick="saveMarker()">保存</button>
+            <button class="btn-del" id="del-btn" onclick="deleteMarker()">删除</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ═══════════════════════════════
+//  状态
+// ═══════════════════════════════
+let sb = null;
+let map = null;
+let leafletMarkers = {};   // id → { lmarker, data }
+let editingId = null;      // 正在编辑的植物 ID
+let pendingLatLng = null;  // 待添加的坐标
+let isAddMode = false;
+let currentImages = [];    // { url, file?, isNew }
+
+const LS_URL = 'zjuflora_url';
+const LS_KEY = 'zjuflora_key';
+const LS_CLAUDE = 'zjuflora_claude';
+
+// ═══════════════════════════════
+//  初始化
+// ═══════════════════════════════
+async function init() {
+    initMap();
+
+    const url = localStorage.getItem(LS_URL);
+    const key = localStorage.getItem(LS_KEY);
+
+    if (!url || !key) {
+        hide('loading');
+        show('cfg-overlay');
+        return;
+    }
+
+    connectSupabase(url, key);
+    await loadAll();
+    hide('loading');
+}
+
+function connectSupabase(url, key) {
+    sb = window.supabase.createClient(url, key);
+}
+
+function initMap() {
+    map = L.map('map', { center: [30.2636, 120.1232], zoom: 17 });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19
+    }).addTo(map);
+    map.on('click', onMapClick);
+}
+
+// ═══════════════════════════════
+//  配置
+// ═══════════════════════════════
+function openConfig() {
+    document.getElementById('cfg-url').value = localStorage.getItem(LS_URL) || '';
+    document.getElementById('cfg-key').value = localStorage.getItem(LS_KEY) || '';
+    document.getElementById('cfg-claude').value = localStorage.getItem(LS_CLAUDE) || '';
+    show('cfg-overlay');
+}
+
+function saveConfig() {
+    const url = document.getElementById('cfg-url').value.trim();
+    const key = document.getElementById('cfg-key').value.trim();
+    if (!url || !key) { alert('请填写完整信息'); return; }
+    localStorage.setItem(LS_URL, url);
+    localStorage.setItem(LS_KEY, key);
+    const claudeKey = document.getElementById('cfg-claude').value.trim();
+    if (claudeKey) localStorage.setItem(LS_CLAUDE, claudeKey);
+    else localStorage.removeItem(LS_CLAUDE);
+    hide('cfg-overlay');
+    connectSupabase(url, key);
+    loadAll();
+    toast('配置已保存 ✓');
+}
+
+// ═══════════════════════════════
+//  地图交互
+// ═══════════════════════════════
+function toggleAddMode() {
+    isAddMode = !isAddMode;
+    const btn = document.getElementById('add-btn');
+    const mapEl = document.getElementById('map');
+    if (isAddMode) {
+        btn.textContent = '✕ 取消添加';
+        btn.classList.add('active');
+        mapEl.classList.add('add-mode');
+        toast('在地图上点击一个位置');
+    } else {
+        btn.textContent = '＋ 添加植物';
+        btn.classList.remove('active');
+        mapEl.classList.remove('add-mode');
+    }
+}
+
+function onMapClick(e) {
+    if (!isAddMode) return;
+    pendingLatLng = e.latlng;
+    editingId = null;
+    currentImages = [];
+    clearForm();
+    setPanel('添加植物', false);
+    openPanel();
+    toggleAddMode();
+}
+
+// ═══════════════════════════════
+//  标记图标
+// ═══════════════════════════════
+const TYPE_COLOR = { flower:'#d63384', tree:'#2d6a4f', shrub:'#40916c', grass:'#74c69d', other:'#6c757d' };
+const TYPE_EMOJI = { flower:'🌸', tree:'🌳', shrub:'🌿', grass:'🍃', other:'🌱' };
+
+function makeIcon(type) {
+    const c = TYPE_COLOR[type] || TYPE_COLOR.other;
+    const e = TYPE_EMOJI[type] || TYPE_EMOJI.other;
+    return L.divIcon({
+        html: `<div style="width:34px;height:34px;background:${c};border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center"><span style="transform:rotate(45deg);font-size:15px;line-height:1">${e}</span></div>`,
+        className: '', iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -36]
+    });
+}
+
+// ═══════════════════════════════
+//  读取数据
+// ═══════════════════════════════
+async function loadAll() {
+    if (!sb) return;
+    const { data, error } = await sb.from('plants').select('*').order('created_at', { ascending: true });
+    if (error) { toast('加载失败：' + error.message); return; }
+    // 清除旧标记
+    Object.values(leafletMarkers).forEach(m => map.removeLayer(m.lmarker));
+    leafletMarkers = {};
+    data.forEach(addToMap);
+}
+
+function addToMap(plant) {
+    const lm = L.marker([plant.lat, plant.lng], { icon: makeIcon(plant.type) })
+        .addTo(map)
+        .on('click', () => openPlant(plant.id));
+    bindTooltip(lm, plant);
+    leafletMarkers[plant.id] = { lmarker: lm, data: plant };
+}
+
+function buildTooltipHtml(plant) {
+    const img = plant.images && plant.images.length > 0
+        ? `<img src="${plant.images[0]}" alt="" />`
+        : '';
+    const latin = plant.latin_name ? `<div class="t-latin">${plant.latin_name}</div>` : '';
+    return `<div class="tooltip-inner">${img}<div class="t-name">${plant.name}</div>${latin}</div>`;
+}
+
+function bindTooltip(lm, plant) {
+    lm.bindTooltip(buildTooltipHtml(plant), {
+        permanent: false,
+        direction: 'top',
+        className: 'plant-tooltip',
+        opacity: 1,
+        offset: [0, -36]
+    });
+}
+
+// ═══════════════════════════════
+//  打开植物详情
+// ═══════════════════════════════
+function openPlant(id) {
+    const entry = leafletMarkers[id];
+    if (!entry) return;
+    const p = entry.data;
+    editingId = id;
+    currentImages = (p.images || []).map(url => ({ url, isNew: false }));
+
+    document.getElementById('f-name').value   = p.name || '';
+    document.getElementById('f-latin').value  = p.latin_name || '';
+    document.getElementById('f-family').value = p.family || '';
+    document.getElementById('f-type').value   = p.type || 'other';
+    document.getElementById('f-season').value = p.season || '';
+    document.getElementById('f-desc').value   = p.description || '';
+
+    renderPreviews();
+    updateRecognizeBtn();
+    setPanel(p.name || '植物详情', true);
+    openPanel();
+}
+
+// ═══════════════════════════════
+//  图片
+// ═══════════════════════════════
+function handleUpload(evt) {
+    const files = Array.from(evt.target.files);
+    let loaded = 0;
+    files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = e => {
+            currentImages.push({ url: e.target.result, file, isNew: true });
+            renderPreviews();
+            loaded++;
+            if (loaded === files.length) updateRecognizeBtn();
+        };
+        reader.readAsDataURL(file);
+    });
+    evt.target.value = '';
+}
+
+function updateRecognizeBtn() {
+    const btn = document.getElementById('recognize-btn');
+    const hasKey = !!localStorage.getItem(LS_CLAUDE);
+    const hasImage = currentImages.length > 0;
+    btn.style.display = (hasKey && hasImage) ? 'block' : 'none';
+}
+
+function compressImage(dataUrl, maxSize = 1024) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            let { width, height } = img;
+            if (width > maxSize || height > maxSize) {
+                if (width > height) { height = Math.round(height * maxSize / width); width = maxSize; }
+                else { width = Math.round(width * maxSize / height); height = maxSize; }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width; canvas.height = height;
+            canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.src = dataUrl;
+    });
+}
+
+async function recognizePlant() {
+    const apiKey = localStorage.getItem(LS_CLAUDE);
+    if (!apiKey) { toast('请先在设置中填写 Anthropic API Key'); return; }
+    if (currentImages.length === 0) { toast('请先上传图片'); return; }
+    if (!sb) { toast('请先完成 Supabase 设置'); return; }
+
+    const btn = document.getElementById('recognize-btn');
+    btn.disabled = true;
+    btn.textContent = '🔍 识别中...';
+
+    try {
+        let srcDataUrl = currentImages[0].url;
+        // 外链图片（已保存的）需先下载为 data URL，否则 Canvas 会报跨域错误
+        if (!srcDataUrl.startsWith('data:')) {
+            const blob = await fetch(srcDataUrl).then(r => r.blob());
+            srcDataUrl = await new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = e => resolve(e.target.result);
+                reader.readAsDataURL(blob);
+            });
+        }
+        const compressed = await compressImage(srcDataUrl);
+        const base64 = compressed.split(',')[1];
+        const mediaType = 'image/jpeg';
+
+        const supabaseUrl = localStorage.getItem(LS_URL);
+        const supabaseAnonKey = localStorage.getItem(LS_KEY);
+        const fnResp = await fetch(`${supabaseUrl}/functions/v1/identify-plant`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${supabaseAnonKey}`,
+                'apikey': supabaseAnonKey
+            },
+            body: JSON.stringify({ imageBase64: base64, mediaType, apiKey })
+        });
+        const data = await fnResp.json();
+        if (data.error) throw new Error(data.error);
+        if (data.status && data.status !== 200) throw new Error(`识别失败 HTTP ${data.status}`);
+
+        const result = data.results?.[0];
+        if (!result) throw new Error('未能识别出植物');
+
+        const species = result.species;
+        const zhNames = species.commonNames || [];
+        const name = zhNames[0] || species.genus?.scientificName || '';
+        const latinName = species.scientificName || '';
+        const familySci = species.family?.scientificName || '';
+        const genus = species.genus?.scientificName || '';
+        const family = (familySci && genus) ? `${familySci}${genus}属` : familySci;
+
+        const GRASS_FAMILIES = ['Poaceae', 'Cyperaceae'];
+        const TREE_FAMILIES  = ['Pinaceae', 'Cupressaceae', 'Fagaceae', 'Betulaceae', 'Oleaceae', 'Magnoliaceae'];
+        const SHRUB_FAMILIES = ['Rosaceae', 'Berberidaceae', 'Caprifoliaceae'];
+        let type = 'flower';
+        if (GRASS_FAMILIES.some(f => familySci.includes(f))) type = 'grass';
+        else if (TREE_FAMILIES.some(f => familySci.includes(f))) type = 'tree';
+        else if (SHRUB_FAMILIES.some(f => familySci.includes(f))) type = 'shrub';
+
+        const info = { name, latin_name: latinName, family, type, season: '', description: '' };
+        // 仅填写空白字段，不覆盖用户已填内容
+        const fill = (id, val) => { if (val && !document.getElementById(id).value.trim()) document.getElementById(id).value = val; };
+        fill('f-name',   info.name);
+        fill('f-latin',  info.latin_name);
+        fill('f-family', info.family);
+        fill('f-season', info.season);
+        fill('f-desc',   info.description);
+        if (info.type) document.getElementById('f-type').value = info.type;
+
+        toast('已识别：' + (info.name || '未知植物') + ' ✓');
+        btn.textContent = '🔍 重新识别';
+    } catch (e) {
+        toast('识别出错：' + e.message);
+        btn.textContent = '🔍 自动识别植物信息';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function renderPreviews() {
+    const box = document.getElementById('images-preview');
+    box.innerHTML = '';
+    currentImages.forEach((img, i) => {
+        const div = document.createElement('div');
+        div.className = 'img-item';
+        div.innerHTML = `<img src="${img.url}" onclick="openLightbox('${img.url}')" /><button class="rm-btn" onclick="event.stopPropagation();rmImg(${i})">✕</button>`;
+        box.appendChild(div);
+    });
+}
+
+function rmImg(i) { currentImages.splice(i, 1); renderPreviews(); }
+
+function openLightbox(url) {
+    document.getElementById('lightbox-img').src = url;
+    document.getElementById('lightbox').classList.remove('hidden');
+}
+function closeLightbox() { document.getElementById('lightbox').classList.add('hidden'); }
+
+async function uploadNewImages() {
+    const urls = [];
+    for (const img of currentImages) {
+        if (!img.isNew) { urls.push(img.url); continue; }
+        const ext = img.file.name.split('.').pop() || 'jpg';
+        const path = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+        const { error } = await sb.storage.from('plant-images').upload(path, img.file, { contentType: img.file.type });
+        if (error) { toast('图片上传失败：' + error.message); continue; }
+        const { data } = sb.storage.from('plant-images').getPublicUrl(path);
+        urls.push(data.publicUrl);
+    }
+    return urls;
+}
+
+// ═══════════════════════════════
+//  保存
+// ═══════════════════════════════
+async function saveMarker() {
+    const name = document.getElementById('f-name').value.trim();
+    if (!name) { toast('请填写中文名'); return; }
+    if (!sb) { toast('请先完成设置'); return; }
+
+    toast('保存中...');
+
+    const images = await uploadNewImages();
+    const payload = {
+        name,
+        latin_name:  document.getElementById('f-latin').value.trim(),
+        family:      document.getElementById('f-family').value.trim(),
+        type:        document.getElementById('f-type').value,
+        season:      document.getElementById('f-season').value.trim(),
+        description: document.getElementById('f-desc').value.trim(),
+        images
+    };
+
+    if (editingId) {
+        const { error } = await sb.from('plants').update(payload).eq('id', editingId);
+        if (error) { toast('保存失败：' + error.message); return; }
+        const entry = leafletMarkers[editingId];
+        if (entry) {
+            entry.lmarker.setIcon(makeIcon(payload.type));
+            entry.data = { ...entry.data, ...payload };
+            entry.lmarker.unbindTooltip();
+            bindTooltip(entry.lmarker, entry.data);
+        }
+        toast('已更新：' + name);
+    } else {
+        if (!pendingLatLng) return;
+        const newPlant = { ...payload, lat: pendingLatLng.lat, lng: pendingLatLng.lng };
+        const { data, error } = await sb.from('plants').insert(newPlant).select().single();
+        if (error) { toast('保存失败：' + error.message); return; }
+        addToMap(data);
+        editingId = data.id;
+        document.getElementById('del-btn').style.display = 'inline-block';
+        toast('已添加：' + name);
+    }
+
+    document.getElementById('panel-title').textContent = name;
+    closePanel();
+}
+
+// ═══════════════════════════════
+//  删除
+// ═══════════════════════════════
+async function deleteMarker() {
+    if (!editingId) return;
+    if (!confirm(`确认删除"${document.getElementById('f-name').value}"？`)) return;
+    const { error } = await sb.from('plants').delete().eq('id', editingId);
+    if (error) { toast('删除失败'); return; }
+    const entry = leafletMarkers[editingId];
+    if (entry) { map.removeLayer(entry.lmarker); delete leafletMarkers[editingId]; }
+    closePanel();
+    toast('已删除');
+}
+
+// ═══════════════════════════════
+//  面板控制
+// ═══════════════════════════════
+function setPanel(title, showDel) {
+    document.getElementById('panel-title').textContent = title;
+    document.getElementById('del-btn').style.display = showDel ? 'inline-block' : 'none';
+}
+function openPanel()  { document.getElementById('panel').classList.add('open'); }
+function closePanel() { document.getElementById('panel').classList.remove('open'); }
+function clearForm() {
+    ['f-name','f-latin','f-family','f-season','f-desc'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('f-type').value = 'flower';
+    currentImages = [];
+    renderPreviews();
+    document.getElementById('recognize-btn').style.display = 'none';
+}
+
+// ═══════════════════════════════
+//  工具
+// ═══════════════════════════════
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
+function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+// ── 启动 ──
+init();
+</script>
+</body>
+</html>
