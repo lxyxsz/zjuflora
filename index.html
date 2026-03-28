@@ -3,6 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#2d6a4f">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="花草图鉴">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <title>玉泉花草图鉴</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -46,6 +53,10 @@
         .btn-add.active { background: #c0392b; }
         .btn-cfg { background: rgba(255,255,255,0.18); color: white; }
         .btn-cfg:hover { background: rgba(255,255,255,0.28); }
+        .btn-gps { background: rgba(255,255,255,0.18); color: white; font-size: 16px; padding: 6px 10px; }
+        .btn-gps:hover { background: rgba(255,255,255,0.28); }
+        .btn-gps.locating { animation: pulse 1s ease-in-out infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
         /* ── Season Filter Bar ── */
         #season-bar {
@@ -464,6 +475,7 @@
     <h1>🌿 玉泉花草图鉴</h1>
     <div id="header-controls">
         <button class="btn btn-add" id="add-btn" onclick="toggleAddMode()">＋ 添加植物</button>
+        <button class="btn btn-gps" id="gps-btn" onclick="addByGps()" title="GPS定位添加">📍</button>
         <button class="btn btn-cfg" onclick="openConfig()">设置</button>
     </div>
 </div>
@@ -1199,6 +1211,48 @@ function toast(msg) {
         startY = curY = 0;
     });
 })();
+
+// ═══════════════════════════════
+//  GPS 定位添加
+// ═══════════════════════════════
+function addByGps() {
+    if (!navigator.geolocation) { toast('浏览器不支持 GPS 定位'); return; }
+
+    const btn = document.getElementById('gps-btn');
+    btn.classList.add('locating');
+    btn.textContent = '⏳';
+    toast('正在获取位置...');
+
+    navigator.geolocation.getCurrentPosition(
+        pos => {
+            btn.classList.remove('locating');
+            btn.textContent = '📍';
+            pendingLatLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            editingId = null;
+            currentImages = [];
+            clearForm();
+            setPanel('添加植物', false);
+            openPanel();
+            // 地图移到当前位置
+            map.setView([pendingLatLng.lat, pendingLatLng.lng], Math.max(map.getZoom(), 18));
+            toast('已定位到当前位置');
+        },
+        err => {
+            btn.classList.remove('locating');
+            btn.textContent = '📍';
+            const msg = { 1:'请允许位置权限', 2:'无法获取位置信号', 3:'定位超时，请重试' };
+            toast(msg[err.code] || '定位失败');
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+}
+
+// ── Service Worker 注册 ──
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+}
 
 // ── 启动 ──
 init();
