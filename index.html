@@ -936,14 +936,17 @@ function showAutocomplete(query) {
 
     if (matches.length === 0) { box.style.display = 'none'; return; }
 
-    box.innerHTML = matches.map(e => {
+    box.innerHTML = '';
+    matches.forEach(e => {
         const d = e.data;
         const sub = [d.latin_name, d.family].filter(Boolean).join(' · ');
-        return `<div class="ac-item" onmousedown="fillFromExisting(${JSON.stringify(d.name)})">
-            <div class="ac-main">${d.name}</div>
-            ${sub ? `<div class="ac-sub">${sub}</div>` : ''}
-        </div>`;
-    }).join('');
+        const item = document.createElement('div');
+        item.className = 'ac-item';
+        item.innerHTML = `<div class="ac-main">${d.name}</div>${sub ? `<div class="ac-sub">${sub}</div>` : ''}`;
+        item.addEventListener('mousedown', ev => { ev.preventDefault(); fillFromExisting(d.name); });
+        item.addEventListener('touchend',  ev => { ev.preventDefault(); fillFromExisting(d.name); });
+        box.appendChild(item);
+    });
     box.style.display = 'block';
 }
 
