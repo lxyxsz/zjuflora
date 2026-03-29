@@ -997,9 +997,9 @@ async function recognizePlant() {
         else if (SHRUB_FAMILIES.some(f => familySci.includes(f))) type = 'shrub';
 
         let description = '';
-        if (latinName) {
+        if (latinName || name) {
             btn.textContent = '🔍 查询百科信息...';
-            const wiki = await enrichWithWikipedia(latinName);
+            const wiki = await enrichWithWikipedia(latinName, name);
             if (wiki) {
                 if (!name) name = wiki.name;
                 description = wiki.description;
@@ -1086,58 +1086,86 @@ function fillFromExisting(name) {
 //  维基百科补充信息
 // ═══════════════════════════════
 async function enrichWithPoetry(plantName) {
-    try {
-        // 用中文名搜索维基百科，获取完整正文
-        const searchResp = await fetch(
-            `https://zh.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(plantName)}&format=json&origin=*&limit=3`
-        );
-        const searchData = await searchResp.json();
-        const titles = searchData[1] || [];
-        if (!titles.length) return '';
+    const keywords = ['诗', '词', '赋', '诗人', '意象', '象征', '典故', '吟', '咏', '文人', '歌颂', '寓意', '比喻'];
 
-        const articleResp = await fetch(
-            `https://zh.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titles[0])}&prop=extracts&explaintext=1&format=json&origin=*`
-        );
-        const articleData = await articleResp.json();
-        const pages = articleData.query?.pages || {};
-        const extract = Object.values(pages)[0]?.extract || '';
-        if (!extract) return '';
+    async function tryFetchPoetry(query) {
+        try {
+            // 用全文搜索 API，比 opensearch 命中率更高
+            const searchResp = await fetch(
+                `https://zh.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=3`
+            );
+            const searchData = await searchResp.json();
+            const hits = searchData.query?.search || [];
+            if (!hits.length) return '';
 
-        // 按句号分句，找出含诗词/意象相关词的句子
-        const keywords = ['诗', '词', '赋', '诗人', '意象', '象征', '典故', '吟', '咏', '文人', '歌颂', '寓意', '比喻'];
-        const sentences = extract.replace(/\n+/g, ' ').split(/[。！？]/).filter(s => s.trim().length > 8);
-        const relevant = sentences.filter(s => keywords.some(k => s.includes(k)));
-        if (!relevant.length) return '';
+            const articleResp = await fetch(
+                `https://zh.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(hits[0].title)}&prop=extracts&explaintext=1&format=json&origin=*`
+            );
+            const articleData = await articleResp.json();
+            const extract = Object.values(articleData.query?.pages || {})[0]?.extract || '';
+            if (!extract) return '';
 
-        return (relevant.slice(0, 2).join('。') + '。').slice(0, 150);
-    } catch (e) {
-        return '';
+            const sentences = extract.replace(/\n+/g, ' ').split(/[。！？]/).filter(s => s.trim().length > 8);
+            const relevant = sentences.filter(s => keywords.some(k => s.includes(k)));
+            return relevant.length ? (relevant.slice(0, 2).join('。') + '。').slice(0, 150) : '';
+        } catch (e) {
+            return '';
+        }
     }
+
+    // 先用完整名称搜索
+    let result = await tryFetchPoetry(plantName);
+    if (result) return result;
+
+    // 去掉括号内容后再试（如"月季（蔷薇）"→"月季"）
+    const simplified = plantName.replace(/[（(].+?[）)]/g, '').trim();
+    if (simplified && simplified !== plantName) {
+        result = await tryFetchPoetry(simplified);
+    }
+    return result;
 }
 
-async function enrichWithWikipedia(scientificName) {
-    try {
-        const searchResp = await fetch(
-            `https://zh.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(scientificName)}&format=json&origin=*&limit=3`
-        );
-        const searchData = await searchResp.json();
-        const titles = searchData[1] || [];
-        if (titles.length === 0) return null;
+async function enrichWithWikipedia(scientificName, chineseName) {
+    // 尝试从维基百科摘要获取信息，依次尝试多个来源
+    async function tryWikiSummary(lang, query) {
+        try {
+            const searchResp = await fetch(
+                `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=3`
+            );
+            const searchData = await searchResp.json();
+            const hits = searchData.query?.search || [];
+            if (!hits.length) return null;
 
-        const summaryResp = await fetch(
-            `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[0])}`
-        );
-        if (!summaryResp.ok) return null;
-        const summary = await summaryResp.json();
-
-        const wikiName = /[\u4e00-\u9fff]/.test(summary.title) ? summary.title : '';
-        const extract = summary.extract || '';
-        const description = extract.replace(/\n/g, ' ').slice(0, 80);
-
-        return wikiName || description ? { name: wikiName, description } : null;
-    } catch (e) {
-        return null;
+            const title = hits[0].title;
+            const summaryResp = await fetch(
+                `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
+            );
+            if (!summaryResp.ok) return null;
+            const summary = await summaryResp.json();
+            return summary;
+        } catch (e) {
+            return null;
+        }
     }
+
+    // 第一级：学名搜中文维基
+    let summary = await tryWikiSummary('zh', scientificName);
+
+    // 第二级：中文名搜中文维基
+    if ((!summary?.extract) && chineseName) {
+        summary = await tryWikiSummary('zh', chineseName);
+    }
+
+    // 第三级：学名搜英文维基（翻译标题判断是否有中文别名）
+    if (!summary?.extract) {
+        summary = await tryWikiSummary('en', scientificName);
+    }
+
+    if (!summary?.extract) return null;
+
+    const wikiName = /[\u4e00-\u9fff]/.test(summary.title) ? summary.title : '';
+    const description = summary.extract.replace(/\n/g, ' ').slice(0, 100);
+    return wikiName || description ? { name: wikiName, description } : null;
 }
 
 function renderPreviews() {
