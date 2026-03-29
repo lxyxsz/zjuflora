@@ -1,0 +1,116 @@
+==============================
+  玉泉花草图鉴 · 配置指南
+==============================
+
+需要做两件事：
+  A. 注册 Supabase（免费数据库，用来存植物数据和图片）
+  B. 把代码放到 GitHub Pages（让手机电脑都能访问）
+
+──────────────────────────────
+A. 配置 Supabase（约10分钟）
+──────────────────────────────
+
+1. 打开 https://supabase.com，点右上角 "Start your project"
+   → 用你的 GitHub 账号登录
+
+2. 点 "New project"
+   → Organization 选默认的
+   → Project name: zjuflora（随便起）
+   → Database Password: 设一个密码（记下来备用）
+   → Region: 选 Northeast Asia (Tokyo)
+   → 点 "Create new project"（等待约1分钟）
+
+3. 创建数据表
+   → 左侧菜单点 "SQL Editor"
+   → 点 "New query"
+   → 把下面这段 SQL 完整粘贴进去，然后点右上角 "Run"：
+
+-------- 复制下面这段 --------
+CREATE TABLE plants (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name TEXT NOT NULL,
+  latin_name TEXT,
+  family TEXT,
+  type TEXT DEFAULT 'other',
+  season TEXT,
+  description TEXT,
+  poetry TEXT,
+  lat FLOAT8 NOT NULL,
+  lng FLOAT8 NOT NULL,
+  images TEXT[] DEFAULT '{}',
+  season_images JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE plants ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "allow_all" ON plants FOR ALL USING (true) WITH CHECK (true);
+-------- 复制到这里结束 --------
+
+   看到 "Success. No rows returned" 就说明成功了。
+
+4. 创建图片存储桶
+   → 左侧菜单点 "Storage"
+   → 点 "New bucket"
+   → Bucket name: plant-images
+   → 勾选 "Public bucket"（让图片可以公开访问）
+   → 点 "Save"
+
+5. 获取连接信息
+   → 左侧菜单点 "Project Settings"（齿轮图标）
+   → 点 "API"
+   → 找到这两项，复制下来：
+       · Project URL：类似 https://abcdefgh.supabase.co
+https://doxqgwovrnptxrirvauf.supabase.co
+       · Project API keys → anon public：一长串字母数字
+
+──────────────────────────────
+B. 部署到 GitHub Pages（约5分钟）
+──────────────────────────────
+
+1. 打开 https://github.com，登录你的账号
+   → 点右上角 "+" → "New repository"
+   → Repository name: zjuflora（随便起）
+   → 选 "Public"
+   → 点 "Create repository"
+
+2. 进入刚建的仓库页面
+   → 点 "uploading an existing file"（或者 "Add file" → "Upload files"）
+   → 把 index.html 文件拖进去
+   → 点 "Commit changes"
+
+3. 开启 GitHub Pages
+   → 点仓库上方的 "Settings"
+   → 左侧点 "Pages"
+   → Source 选 "Deploy from a branch"
+   → Branch 选 "main"，文件夹选 "/ (root)"
+   → 点 "Save"
+   → 等1-2分钟，页面会显示你的网址：
+     https://你的GitHub用户名.github.io/zjuflora/
+
+4. 打开这个网址
+   → 第一次会弹出配置框
+   → 填入第 A 步第5条复制的 Project URL 和 anon public key
+   → 点 "保存并开始使用"
+
+部署 Edge Function（一次性操作）                                                                                      
+  方法一：Supabase Dashboard（推荐，无需命令行）                                                                                                                                    t
+  1. 打开 https://supabase.com → 进入你的项目
+  2. 左侧菜单 → Edge Functions → Deploy a new function
+  3. 函数名填 identify-plant
+  4. 把 supabase/functions/identify-plant/index.ts 的内容粘贴进去
+  5. 点击 Deploy
+==============================
+  之后每次更新代码
+==============================
+去 GitHub 仓库，点 index.html → 铅笔图标（Edit）→ 修改 → Commit
+或者直接重新上传新版 index.html 文件。
+
+==============================
+  使用方法
+==============================
+· 点 "添加植物" → 在地图上点一个位置 → 填写信息 → 保存
+· 点地图上的标记 → 查看或编辑信息
+· 图片支持手机拍照上传
+· 数据自动同步，换电脑/手机都能看到
+
+如有问题，把报错信息告诉 Claude 即可。

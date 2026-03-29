@@ -230,6 +230,33 @@
         #upload-area:hover { border-color: #52b788; color: #52b788; }
         #upload-input { display: none; }
 
+        /* ── Image Season Tabs ── */
+        #img-season-tabs {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+        .img-s-tab {
+            padding: 3px 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 16px;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+            background: #fafafa;
+            color: #888;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+        }
+        .img-s-tab:hover { background: #f0faf4; color: #2d6a4f; border-color: #b7e4c7; }
+        .img-s-tab.active { background: #2d6a4f; color: white; border-color: #2d6a4f; }
+        #img-all-hint {
+            display: none;
+            font-size: 12px; color: #aaa;
+            text-align: center;
+            padding: 10px 0 4px;
+        }
+
         /* ── Autocomplete ── */
         #name-autocomplete {
             display: none;
@@ -549,8 +576,22 @@
                     <textarea id="f-desc" placeholder="记录这株植物的特征、位置、趣闻..."></textarea>
                 </div>
 
+                <div class="form-group">
+                    <label>古诗词意象</label>
+                    <textarea id="f-poetry" placeholder="该植物在哪些古诗词中出现过，代表什么意象..." style="min-height:72px"></textarea>
+                </div>
+
                 <div>
-                    <div id="images-label" style="margin-bottom:8px">图片</div>
+                    <div id="images-label" style="margin-bottom:6px">图片</div>
+                    <!-- 季节图片切换标签 -->
+                    <div id="img-season-tabs">
+                        <button class="img-s-tab active" data-season="all" onclick="switchImgSeason('all', this)">全年</button>
+                        <button class="img-s-tab" data-season="spring" onclick="switchImgSeason('spring', this)">🌸 春</button>
+                        <button class="img-s-tab" data-season="summer" onclick="switchImgSeason('summer', this)">☀️ 夏</button>
+                        <button class="img-s-tab" data-season="autumn" onclick="switchImgSeason('autumn', this)">🍂 秋</button>
+                        <button class="img-s-tab" data-season="winter" onclick="switchImgSeason('winter', this)">❄️ 冬</button>
+                    </div>
+                    <div id="img-all-hint">全年为四季图片的合集，请切换到具体季节来添加图片</div>
                     <div id="images-preview"></div>
                     <div id="upload-area" onclick="document.getElementById('upload-input').click()">
                         📷 点击上传图片（可多张，支持手机拍照）
@@ -580,7 +621,10 @@ let leafletMarkers = {};   // id → { lmarker, data }
 let editingId = null;      // 正在编辑的植物 ID
 let pendingLatLng = null;  // 待添加的坐标
 let isAddMode = false;
-let currentImages = [];    // { url, file?, isNew }
+
+// 每个季节独立的图片列表，全年为四季并集（只读视图）
+let currentSeasonImages = { spring: [], summer: [], autumn: [], winter: [] };
+let currentImageSeason = 'all'; // 'all' | 'spring' | 'summer' | 'autumn' | 'winter'
 
 const LS_URL = 'zjuflora_url';
 const LS_KEY = 'zjuflora_key';
@@ -591,16 +635,26 @@ let activeSeasonFilter = null; // null = 全部
 const SEASON_LABEL = { spring:'🌸 春', summer:'☀️ 夏', autumn:'🍂 秋', winter:'❄️ 冬' };
 const SEASON_CLASS = { spring:'tag-spring', summer:'tag-summer', autumn:'tag-autumn', winter:'tag-winter' };
 
+function getCurImages() {
+    if (currentImageSeason === 'all') {
+        return [
+            ...currentSeasonImages.spring,
+            ...currentSeasonImages.summer,
+            ...currentSeasonImages.autumn,
+            ...currentSeasonImages.winter,
+        ];
+    }
+    return currentSeasonImages[currentImageSeason];
+}
+
 function getBjNow() {
-    // 北京时间 UTC+8
     return new Date(Date.now() + 8 * 3600 * 1000);
 }
 
 function getSeason(dateStr) {
     if (!dateStr) return null;
-    // 转为北京时间月份
     const d = new Date(new Date(dateStr).getTime() + 8 * 3600 * 1000);
-    const m = d.getUTCMonth() + 1; // 1-12
+    const m = d.getUTCMonth() + 1;
     if (m >= 3 && m <= 5)  return 'spring';
     if (m >= 6 && m <= 8)  return 'summer';
     if (m >= 9 && m <= 11) return 'autumn';
@@ -694,7 +748,7 @@ function onMapClick(e) {
     if (!isAddMode) return;
     pendingLatLng = e.latlng;
     editingId = null;
-    currentImages = [];
+    resetSeasonImages();
     clearForm();
     setPanel('添加植物', false);
     openPanel();
@@ -723,7 +777,6 @@ async function loadAll() {
     if (!sb) return;
     const { data, error } = await sb.from('plants').select('*').order('created_at', { ascending: true });
     if (error) { toast('加载失败：' + error.message); return; }
-    // 清除旧标记
     Object.values(leafletMarkers).forEach(m => map.removeLayer(m.lmarker));
     leafletMarkers = {};
     data.forEach(addToMap);
@@ -751,13 +804,24 @@ function filterSeason(season, btn) {
     activeSeasonFilter = season;
     document.querySelectorAll('.s-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    Object.keys(leafletMarkers).forEach(applyFilterToMarker);
+    Object.keys(leafletMarkers).forEach(id => {
+        applyFilterToMarker(id);
+        // 季节切换时刷新 tooltip，显示对应季节的图片
+        const entry = leafletMarkers[id];
+        if (entry) {
+            entry.lmarker.unbindTooltip();
+            bindTooltip(entry.lmarker, entry.data);
+        }
+    });
 }
 
 function buildTooltipHtml(plant) {
-    const img = plant.images && plant.images.length > 0
-        ? `<img src="${plant.images[0]}" alt="" />`
-        : '';
+    // 优先用全局筛选季节对应的图片，否则用全年图片
+    const seasonImgs = activeSeasonFilter && plant.season_images && plant.season_images[activeSeasonFilter];
+    const firstImg = (seasonImgs && seasonImgs.length > 0)
+        ? seasonImgs[0]
+        : (plant.images && plant.images.length > 0 ? plant.images[0] : null);
+    const img   = firstImg ? `<img src="${firstImg}" alt="" />` : '';
     const latin = plant.latin_name ? `<div class="t-latin">${plant.latin_name}</div>` : '';
     return `<div class="tooltip-inner">${img}<div class="t-name">${plant.name}</div>${latin}</div>`;
 }
@@ -780,7 +844,21 @@ function openPlant(id) {
     if (!entry) return;
     const p = entry.data;
     editingId = id;
-    currentImages = (p.images || []).map(url => ({ url, isNew: false }));
+
+    // 加载各季节图片
+    const si = p.season_images || {};
+    currentSeasonImages = {
+        spring: (si.spring  || []).map(url => ({ url, isNew: false })),
+        summer: (si.summer  || []).map(url => ({ url, isNew: false })),
+        autumn: (si.autumn  || []).map(url => ({ url, isNew: false })),
+        winter: (si.winter  || []).map(url => ({ url, isNew: false })),
+    };
+    currentImageSeason = 'all';
+    document.querySelectorAll('.img-s-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.season === 'all')
+    );
+    document.getElementById('img-all-hint').style.display = 'block';
+    document.getElementById('upload-area').style.display = 'none';
 
     document.getElementById('f-name').value   = p.name || '';
     document.getElementById('f-latin').value  = p.latin_name || '';
@@ -788,6 +866,7 @@ function openPlant(id) {
     document.getElementById('f-type').value   = p.type || 'other';
     document.getElementById('f-season').value = p.season || '';
     document.getElementById('f-desc').value   = p.description || '';
+    document.getElementById('f-poetry').value = p.poetry || '';
 
     renderPreviews();
     updateRecognizeBtn();
@@ -797,15 +876,30 @@ function openPlant(id) {
 }
 
 // ═══════════════════════════════
+//  季节图片切换（编辑面板内）
+// ═══════════════════════════════
+function switchImgSeason(season, btn) {
+    currentImageSeason = season;
+    document.querySelectorAll('.img-s-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const isAll = season === 'all';
+    document.getElementById('img-all-hint').style.display = isAll ? 'block' : 'none';
+    document.getElementById('upload-area').style.display = isAll ? 'none' : '';
+    renderPreviews();
+    updateRecognizeBtn();
+}
+
+// ═══════════════════════════════
 //  图片
 // ═══════════════════════════════
 function handleUpload(evt) {
+    if (currentImageSeason === 'all') { evt.target.value = ''; return; }
     const files = Array.from(evt.target.files);
     let loaded = 0;
     files.forEach(file => {
         const reader = new FileReader();
         reader.onload = e => {
-            currentImages.push({ url: e.target.result, file, isNew: true });
+            currentSeasonImages[currentImageSeason].push({ url: e.target.result, file, isNew: true });
             renderPreviews();
             loaded++;
             if (loaded === files.length) updateRecognizeBtn();
@@ -818,7 +912,7 @@ function handleUpload(evt) {
 function updateRecognizeBtn() {
     const btn = document.getElementById('recognize-btn');
     const hasKey = !!localStorage.getItem(LS_CLAUDE);
-    const hasImage = currentImages.length > 0;
+    const hasImage = Object.values(currentSeasonImages).some(arr => arr.length > 0);
     btn.style.display = (hasKey && hasImage) ? 'block' : 'none';
 }
 
@@ -843,16 +937,18 @@ function compressImage(dataUrl, maxSize = 1024) {
 async function recognizePlant() {
     const apiKey = localStorage.getItem(LS_CLAUDE);
     if (!apiKey) { toast('请先在设置中填写 Anthropic API Key'); return; }
-    if (currentImages.length === 0) { toast('请先上传图片'); return; }
     if (!sb) { toast('请先完成 Supabase 设置'); return; }
+
+    // 优先用当前季节标签的第一张图，否则用全年第一张
+    const imgs = getCurImages().length > 0 ? getCurImages() : currentSeasonImages.default;
+    if (imgs.length === 0) { toast('请先上传图片'); return; }
 
     const btn = document.getElementById('recognize-btn');
     btn.disabled = true;
     btn.textContent = '🔍 识别中...';
 
     try {
-        let srcDataUrl = currentImages[0].url;
-        // 外链图片（已保存的）需先下载为 data URL，否则 Canvas 会报跨域错误
+        let srcDataUrl = imgs[0].url;
         if (!srcDataUrl.startsWith('data:')) {
             const blob = await fetch(srcDataUrl).then(r => r.blob());
             srcDataUrl = await new Promise(resolve => {
@@ -884,7 +980,6 @@ async function recognizePlant() {
         if (!result) throw new Error('未能识别出植物');
 
         const species = result.species;
-        // 优先取含中文字符的 commonName
         const allNames = species.commonNames || [];
         const zhNames = allNames.filter(n => /[\u4e00-\u9fff]/.test(n));
         let name = zhNames[0] || '';
@@ -901,7 +996,6 @@ async function recognizePlant() {
         else if (TREE_FAMILIES.some(f => familySci.includes(f))) type = 'tree';
         else if (SHRUB_FAMILIES.some(f => familySci.includes(f))) type = 'shrub';
 
-        // 用维基百科补充中文名和描述
         let description = '';
         if (latinName) {
             btn.textContent = '🔍 查询百科信息...';
@@ -912,14 +1006,20 @@ async function recognizePlant() {
             }
         }
 
-        const info = { name, latin_name: latinName, family, type, season: '', description };
-        // 仅填写空白字段，不覆盖用户已填内容
+        let poetry = '';
+        if (name) {
+            btn.textContent = '🔍 查询诗词意象...';
+            poetry = await enrichWithPoetry(name);
+        }
+
+        const info = { name, latin_name: latinName, family, type, season: '', description, poetry };
         const fill = (id, val) => { if (val && !document.getElementById(id).value.trim()) document.getElementById(id).value = val; };
         fill('f-name',   info.name);
         fill('f-latin',  info.latin_name);
         fill('f-family', info.family);
         fill('f-season', info.season);
         fill('f-desc',   info.description);
+        fill('f-poetry', info.poetry);
         if (info.type) document.getElementById('f-type').value = info.type;
 
         toast('已识别：' + (info.name || '未知植物') + ' ✓');
@@ -967,7 +1067,6 @@ function hideAutocomplete() {
 }
 
 function fillFromExisting(name) {
-    // 取同名最新一条记录
     const entry = Object.values(leafletMarkers)
         .filter(e => e.data.name === name)
         .sort((a, b) => new Date(b.data.created_at) - new Date(a.data.created_at))[0];
@@ -979,15 +1078,45 @@ function fillFromExisting(name) {
     document.getElementById('f-type').value   = p.type || 'other';
     document.getElementById('f-season').value = p.season || '';
     document.getElementById('f-desc').value   = p.description || '';
+    document.getElementById('f-poetry').value = p.poetry || '';
     hideAutocomplete();
 }
 
 // ═══════════════════════════════
 //  维基百科补充信息
 // ═══════════════════════════════
+async function enrichWithPoetry(plantName) {
+    try {
+        // 用中文名搜索维基百科，获取完整正文
+        const searchResp = await fetch(
+            `https://zh.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(plantName)}&format=json&origin=*&limit=3`
+        );
+        const searchData = await searchResp.json();
+        const titles = searchData[1] || [];
+        if (!titles.length) return '';
+
+        const articleResp = await fetch(
+            `https://zh.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titles[0])}&prop=extracts&explaintext=1&format=json&origin=*`
+        );
+        const articleData = await articleResp.json();
+        const pages = articleData.query?.pages || {};
+        const extract = Object.values(pages)[0]?.extract || '';
+        if (!extract) return '';
+
+        // 按句号分句，找出含诗词/意象相关词的句子
+        const keywords = ['诗', '词', '赋', '诗人', '意象', '象征', '典故', '吟', '咏', '文人', '歌颂', '寓意', '比喻'];
+        const sentences = extract.replace(/\n+/g, ' ').split(/[。！？]/).filter(s => s.trim().length > 8);
+        const relevant = sentences.filter(s => keywords.some(k => s.includes(k)));
+        if (!relevant.length) return '';
+
+        return (relevant.slice(0, 2).join('。') + '。').slice(0, 150);
+    } catch (e) {
+        return '';
+    }
+}
+
 async function enrichWithWikipedia(scientificName) {
     try {
-        // 先用学名搜索中文维基
         const searchResp = await fetch(
             `https://zh.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(scientificName)}&format=json&origin=*&limit=3`
         );
@@ -995,7 +1124,6 @@ async function enrichWithWikipedia(scientificName) {
         const titles = searchData[1] || [];
         if (titles.length === 0) return null;
 
-        // 取第一个结果的摘要
         const summaryResp = await fetch(
             `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[0])}`
         );
@@ -1004,7 +1132,6 @@ async function enrichWithWikipedia(scientificName) {
 
         const wikiName = /[\u4e00-\u9fff]/.test(summary.title) ? summary.title : '';
         const extract = summary.extract || '';
-        // 截取前80字作为描述
         const description = extract.replace(/\n/g, ' ').slice(0, 80);
 
         return wikiName || description ? { name: wikiName, description } : null;
@@ -1016,15 +1143,21 @@ async function enrichWithWikipedia(scientificName) {
 function renderPreviews() {
     const box = document.getElementById('images-preview');
     box.innerHTML = '';
-    currentImages.forEach((img, i) => {
+    const isAll = currentImageSeason === 'all';
+    getCurImages().forEach((img, i) => {
         const div = document.createElement('div');
         div.className = 'img-item';
-        div.innerHTML = `<img src="${img.url}" onclick="openLightbox('${img.url}')" /><button class="rm-btn" onclick="event.stopPropagation();rmImg(${i})">✕</button>`;
+        const rmBtn = isAll ? '' : `<button class="rm-btn" onclick="event.stopPropagation();rmImg(${i})">✕</button>`;
+        div.innerHTML = `<img src="${img.url}" onclick="openLightbox('${img.url}')" />${rmBtn}`;
         box.appendChild(div);
     });
 }
 
-function rmImg(i) { currentImages.splice(i, 1); renderPreviews(); }
+function rmImg(i) {
+    if (currentImageSeason === 'all') return;
+    currentSeasonImages[currentImageSeason].splice(i, 1);
+    renderPreviews();
+}
 
 function openLightbox(url) {
     document.getElementById('lightbox-img').src = url;
@@ -1032,14 +1165,14 @@ function openLightbox(url) {
 }
 function closeLightbox() { document.getElementById('lightbox').classList.add('hidden'); }
 
-async function uploadNewImages() {
+// 上传单个季节的图片列表，返回 URL 数组
+async function uploadSeasonImagesArr(images) {
     const urls = [];
-    for (const img of currentImages) {
+    for (const img of images) {
         if (!img.isNew) { urls.push(img.url); continue; }
         const ext = img.file.name.split('.').pop() || 'jpg';
         const path = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
 
-        // 压缩后再上传，减小体积
         let file = img.file;
         try {
             const compressed = await compressImage(img.url, 1200);
@@ -1047,7 +1180,6 @@ async function uploadNewImages() {
             file = new File([blob], img.file.name, { type: 'image/jpeg' });
         } catch(_) {}
 
-        // 30 秒超时
         const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('上传超时，请检查网络')), 30000));
         const upload = sb.storage.from('plant-images').upload(path, file, { contentType: 'image/jpeg' });
         const { error } = await Promise.race([upload, timeout]);
@@ -1056,6 +1188,15 @@ async function uploadNewImages() {
         urls.push(data.publicUrl);
     }
     return urls;
+}
+
+// 上传所有季节的图片，返回 { spring, summer, autumn, winter }
+async function uploadAllSeasonImages() {
+    const result = {};
+    for (const season of ['spring', 'summer', 'autumn', 'winter']) {
+        result[season] = await uploadSeasonImagesArr(currentSeasonImages[season]);
+    }
+    return result;
 }
 
 // ═══════════════════════════════
@@ -1072,15 +1213,29 @@ async function saveMarker() {
     saveBtn.textContent = '保存中...';
 
     try {
-        const images = await uploadNewImages();
+        const allImages = await uploadAllSeasonImages();
+        // images 字段存四季并集，供 tooltip 等旧逻辑使用
+        const unionImages = [
+            ...allImages.spring,
+            ...allImages.summer,
+            ...allImages.autumn,
+            ...allImages.winter,
+        ];
         const payload = {
             name,
-            latin_name:  document.getElementById('f-latin').value.trim(),
-            family:      document.getElementById('f-family').value.trim(),
-            type:        document.getElementById('f-type').value,
-            season:      document.getElementById('f-season').value.trim(),
-            description: document.getElementById('f-desc').value.trim(),
-            images
+            latin_name:   document.getElementById('f-latin').value.trim(),
+            family:       document.getElementById('f-family').value.trim(),
+            type:         document.getElementById('f-type').value,
+            season:       document.getElementById('f-season').value.trim(),
+            description:  document.getElementById('f-desc').value.trim(),
+            poetry:       document.getElementById('f-poetry').value.trim(),
+            images:       unionImages,
+            season_images: {
+                spring: allImages.spring,
+                summer: allImages.summer,
+                autumn: allImages.autumn,
+                winter: allImages.winter,
+            }
         };
 
         if (editingId) {
@@ -1156,10 +1311,20 @@ function renderSeasonTag(createdAt) {
     el.innerHTML = `记录于 ${formatBjTime(createdAt)} &nbsp;<span class="${cls}">${label}</span>`;
 }
 
+function resetSeasonImages() {
+    currentSeasonImages = { spring: [], summer: [], autumn: [], winter: [] };
+    currentImageSeason = 'all';
+    document.querySelectorAll('.img-s-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.season === 'all')
+    );
+    document.getElementById('img-all-hint').style.display = 'block';
+    document.getElementById('upload-area').style.display = 'none';
+}
+
 function clearForm() {
-    ['f-name','f-latin','f-family','f-season','f-desc'].forEach(id => document.getElementById(id).value = '');
+    ['f-name','f-latin','f-family','f-season','f-desc','f-poetry'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('f-type').value = 'flower';
-    currentImages = [];
+    resetSeasonImages();
     renderPreviews();
     document.getElementById('recognize-btn').style.display = 'none';
     document.getElementById('f-season-tag').style.display = 'none';
@@ -1229,11 +1394,10 @@ function addByGps() {
             btn.textContent = '📍';
             pendingLatLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
             editingId = null;
-            currentImages = [];
+            resetSeasonImages();
             clearForm();
             setPanel('添加植物', false);
             openPanel();
-            // 地图移到当前位置
             map.setView([pendingLatLng.lat, pendingLatLng.lng], Math.max(map.getZoom(), 18));
             toast('已定位到当前位置');
         },
